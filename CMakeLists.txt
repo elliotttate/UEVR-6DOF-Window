@@ -737,6 +737,7 @@ list(APPEND uevr_SOURCES
 	"src/mods/PluginLoader.cpp"
 	"src/mods/UObjectHook.cpp"
 	"src/mods/VR.cpp"
+	"src/mods/WindowMode.cpp"
 	"src/mods/bindings/FS.cpp"
 	"src/mods/bindings/ImGui.cpp"
 	"src/mods/bindings/Json.cpp"
@@ -780,6 +781,7 @@ list(APPEND uevr_SOURCES
 	"src/mods/PluginLoader.hpp"
 	"src/mods/UObjectHook.hpp"
 	"src/mods/VR.hpp"
+	"src/mods/WindowMode.hpp"
 	"src/mods/bindings/FS.hpp"
 	"src/mods/bindings/ImGui.hpp"
 	"src/mods/bindings/Json.hpp"
@@ -848,6 +850,7 @@ target_link_libraries(uevr PUBLIC
 	shlwapi
 	d3d11
 	d3d12
+	d3dcompiler
 	safetyhook
 	glm
 	imgui

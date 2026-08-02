@@ -16,6 +16,7 @@ namespace pixel_shader1 {
 
 #include "Framework.hpp"
 #include "../VR.hpp"
+#include "../WindowMode.hpp"
 
 #include "D3D11Component.hpp"
 
@@ -583,6 +584,9 @@ vr::EVRCompositorError D3D11Component::on_frame(VR* vr) {
                 invoke_shader(vr->m_frame_count, 0, m_backbuffer_size[0] / 2, m_backbuffer_size[1]);
             }
 
+            WindowMode::get()->draw_d3d11(context.Get(), m_left_eye_tex.Get(),
+                m_left_eye_rtv.Get(), WindowMode::Layout::LEFT_EYE);
+
             vr::VRTextureWithPose_t left_eye{
                 (void*)m_left_eye_tex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto,
                 submit_pose
@@ -751,6 +755,9 @@ vr::EVRCompositorError D3D11Component::on_frame(VR* vr) {
                     invoke_shader(vr->m_frame_count, 0, m_backbuffer_size[0] / 2, m_backbuffer_size[1]);
                 }
 
+                WindowMode::get()->draw_d3d11(context.Get(), m_left_eye_tex.Get(),
+                    m_left_eye_rtv.Get(), WindowMode::Layout::LEFT_EYE);
+
                 vr::VRTextureWithPose_t left_eye{
                     (void*)m_left_eye_tex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto,
                     submit_pose
@@ -814,6 +821,9 @@ vr::EVRCompositorError D3D11Component::on_frame(VR* vr) {
                 invoke_shader(vr->m_frame_count, 1, m_backbuffer_size[0] / 2, m_backbuffer_size[1]);
                 //context->OMSetRenderTargets(1, &prev_rtv, prev_depth_rtv.Get());     
             }
+
+            WindowMode::get()->draw_d3d11(context.Get(), m_right_eye_tex.Get(),
+                m_right_eye_rtv.Get(), WindowMode::Layout::RIGHT_EYE);
 
             vr::VRTextureWithPose_t right_eye{
                 (void*)m_right_eye_tex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto,
@@ -2161,6 +2171,16 @@ void D3D11Component::OpenXR::copy(uint32_t swapchain_idx, ID3D11Texture2D* resou
                 } else {
                     context->CopySubresourceRegion(ctx.textures[texture_index].texture, 0, 0, 0, 0, resource, 0, src_box);
                 }
+            }
+
+            const auto double_wide = (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;
+            const auto left_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_LEFT_EYE;
+            const auto right_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_RIGHT_EYE;
+            if (swapchain_idx == double_wide || swapchain_idx == left_eye || swapchain_idx == right_eye) {
+                const auto layout = swapchain_idx == double_wide ? WindowMode::Layout::DOUBLE_WIDE
+                    : (swapchain_idx == left_eye ? WindowMode::Layout::LEFT_EYE : WindowMode::Layout::RIGHT_EYE);
+                WindowMode::get()->draw_d3d11(context.Get(), ctx.textures[texture_index].texture,
+                    nullptr, layout);
             }
 
             XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};

@@ -2,6 +2,35 @@
 
 Universal Unreal Engine VR Mod (4/5)
 
+## 6DOF Window fork
+
+This fork adds an optional **6DOF Window Mode** to UEVR. The game continues
+to render in normal stereoscopic 3D with normal positional head tracking, but
+the outside of each eye image is softly darkened. The result reads like a
+window onto the live 3D world instead of a flat cinema screen or a fully
+immersive view filling the headset.
+
+The feature is off by default and saved per game. Open UEVR's in-game menu,
+select **6DOF Window**, enable it, and adjust:
+
+- **Window Width / Height** — the clear aperture size.
+- **Soft Edge** — the width of the fade from the game into black.
+- **Window Stereo Depth** — per-eye convergence that makes the aperture feel
+  nearer than optical infinity.
+- **Outside Darkness** — the strength of the black surround.
+
+The mask is applied to UEVR's final submitted color images. It supports
+OpenXR and OpenVR, D3D11 and D3D12, and all three UEVR rendering methods.
+Depth and UI swapchains are not modified. This branch starts from UEVR nightly
+01139, source commit `74b76bc9428a906cbdc69de3ebc1905fd0e9cc57`.
+
+The settings are stored in each game's normal UEVR `config.txt` as
+`WindowMode_*` values, so enabling the mode for one game does not turn it on
+for every other game. Runtime validation currently covers a visual on/off A/B
+through OpenXR on D3D11. The D3D12 paths build and initialize in real OpenXR
+sessions, but the available D3D12 test hosts exited in their existing UEVR
+startup/rehook paths before a trustworthy submitted-frame capture was possible.
+
 ## Supported Engine Versions
 
 4.8 - 5.4
@@ -17,6 +46,7 @@ Universal Unreal Engine VR Mod (4/5)
 
 - Full 6DOF support out of the box (HMD movement)
 - Full stereoscopic 3D out of the box
+- Optional 6DOF Window Mode that retains stereo depth and positional parallax
 - Native UE4/UE5 stereo rendering system
 - Frontend GUI for easy process injection
 - Supports OpenVR and OpenXR runtimes

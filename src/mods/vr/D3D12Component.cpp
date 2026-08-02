@@ -7,6 +7,7 @@
 
 #include "Framework.hpp"
 #include "../VR.hpp"
+#include "../WindowMode.hpp"
 
 #include <../../directxtk12-src/Inc/ResourceUploadBatch.h>
 #include <../../directxtk12-src/Inc/RenderTargetState.h>
@@ -1779,6 +1780,18 @@ void D3D12Component::OpenXR::copy(
 
             if (additional_commands) {
                 (*additional_commands)(texture_ctx->commands);
+            }
+
+            const auto double_wide = (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;
+            const auto left_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_LEFT_EYE;
+            const auto right_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_RIGHT_EYE;
+            if (swapchain_idx == double_wide || swapchain_idx == left_eye || swapchain_idx == right_eye) {
+                const auto layout = swapchain_idx == double_wide ? WindowMode::Layout::DOUBLE_WIDE
+                    : (swapchain_idx == left_eye ? WindowMode::Layout::LEFT_EYE : WindowMode::Layout::RIGHT_EYE);
+                if (WindowMode::get()->draw_d3d12(texture_ctx->commands.cmd_list.Get(),
+                        ctx.textures[texture_index].texture, texture_ctx->get_rtv(), layout)) {
+                    texture_ctx->commands.has_commands = true;
+                }
             }
 
             texture_ctx->commands.execute();

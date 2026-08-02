@@ -19,6 +19,7 @@
 
 #include "d3d12/CommandContext.hpp"
 #include "d3d12/TextureContext.hpp"
+#include "../WindowMode.hpp"
 
 class VR;
 
@@ -118,6 +119,8 @@ private:
             src_box.front = 0;
             src_box.back = 1;
             ctx.commands.copy_region(src, ctx.texture.Get(), &src_box, src_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            WindowMode::get()->draw_d3d12(ctx.commands.cmd_list.Get(), ctx.texture.Get(), ctx.get_rtv(),
+                WindowMode::Layout::LEFT_EYE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             ctx.commands.execute();
         }
 
@@ -133,6 +136,8 @@ private:
             src_box.front = 0;
             src_box.back = 1;
             ctx.commands.copy_region(src, ctx.texture.Get(), &src_box, src_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            WindowMode::get()->draw_d3d12(ctx.commands.cmd_list.Get(), ctx.texture.Get(), ctx.get_rtv(),
+                WindowMode::Layout::RIGHT_EYE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             ctx.commands.execute();
         }
         
@@ -149,6 +154,8 @@ private:
             src_box.front = 0;
             src_box.back = 1;
             ctx.commands.copy_region(src, ctx.texture.Get(), &src_box, src_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            WindowMode::get()->draw_d3d12(ctx.commands.cmd_list.Get(), ctx.texture.Get(), ctx.get_rtv(),
+                WindowMode::Layout::RIGHT_EYE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             ctx.commands.execute();
         }
 
