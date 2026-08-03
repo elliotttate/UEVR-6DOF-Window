@@ -1412,6 +1412,26 @@ std::optional<std::string> D3D12Component::OpenXR::create_swapchains() {
             spdlog::info("[VR] AFTER Swapchain texture {} {} ref count: {}", i, j, ref_count);
         }
 
+        // Normal color swapchains are copied to first and then may receive the
+        // room-anchored window draw before they are released to OpenXR. Keep a
+        // separate RTV descriptor per swapchain image so an in-flight command
+        // list never observes an overwritten descriptor. Static images keep
+        // using the one-shot initialization path below, and depth images must
+        // not receive an RTV.
+        if ((swapchain_create_info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) == 0 &&
+            (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) == 0) {
+            for (uint32_t j = 0; j < image_count; ++j) {
+                auto& texture_ctx = ctx.texture_contexts[j];
+                texture_ctx->texture = ctx.textures[j].texture;
+
+                if (!texture_ctx->create_rtv(device, (DXGI_FORMAT)swapchain_create_info.format)) {
+                    spdlog::error("[VR] Failed to create persistent RTV for swapchain {} image {}.", i, j);
+                }
+
+                texture_ctx->texture.Reset();
+            }
+        }
+
         if (swapchain_create_info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) {
             for (uint32_t j = 0; j < image_count; ++j) {
                 XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};

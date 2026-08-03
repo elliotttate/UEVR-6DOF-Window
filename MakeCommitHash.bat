@@ -10,14 +10,13 @@ FOR /F "tokens=*" %%g IN ('git rev-parse HEAD') DO (SET UEVR_COMMIT_HASH=%%g)
 FOR /F "tokens=*" %%t IN ('git describe --tags --abbrev^=0') DO (SET UEVR_TAG=%%t)
 IF "%UEVR_TAG%"=="" (SET UEVR_TAG=no_tag)
 
-FOR /F "tokens=*" %%c IN ('git describe --tags --long') DO (
-FOR /F "tokens=1,2 delims=-" %%a IN ("%%c") DO (
-SET UEVR_TAG_LONG=%%a
-SET UEVR_COMMITS_PAST_TAG=%%b
+REM Do not parse `git describe --long` on hyphens: prerelease tags such as
+REM v0.2.0-alpha.1 contain hyphens themselves. Count directly from the tag.
+SET UEVR_TAG_LONG=%UEVR_TAG%
+SET UEVR_COMMITS_PAST_TAG=0
+IF NOT "%UEVR_TAG%"=="no_tag" (
+FOR /F "tokens=*" %%c IN ('git rev-list --count "%UEVR_TAG%..HEAD"') DO (SET UEVR_COMMITS_PAST_TAG=%%c)
 )
-)
-
-IF "%UEVR_COMMITS_PAST_TAG%"=="" (SET UEVR_COMMITS_PAST_TAG=0)
 
 FOR /F "tokens=*" %%b IN ('git rev-parse --abbrev-ref HEAD') DO (SET UEVR_BRANCH=%%b)
 

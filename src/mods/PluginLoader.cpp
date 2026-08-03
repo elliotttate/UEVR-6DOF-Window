@@ -38,6 +38,7 @@
 #include "LuaLoader.hpp"
 #include "UObjectHook.hpp"
 #include "VR.hpp"
+#include "WindowMode.hpp"
 
 #include "Mods.hpp"
 #include "PluginLoader.hpp"
@@ -2173,6 +2174,11 @@ void PluginLoader::on_post_viewport_client_draw(void* viewport_client, void* vie
 }
 
 void PluginLoader::dispatch_custom_event(const char* event_name, const char* event_data) {
+    if (event_name != nullptr && event_data != nullptr &&
+        std::string_view{event_name} == "CutsceneComfort.WindowMode.v1") {
+        WindowMode::get()->apply_cutscene_comfort_state(event_data);
+    }
+
     std::shared_lock _{m_api_cb_mtx};
 
     for (auto&& cb : m_on_custom_event_cbs) {

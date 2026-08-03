@@ -6,30 +6,45 @@ Universal Unreal Engine VR Mod (4/5)
 
 This fork adds an optional **6DOF Window Mode** to UEVR. The game continues
 to render in normal stereoscopic 3D with normal positional head tracking, but
-the outside of each eye image is softly darkened. The result reads like a
-window onto the live 3D world instead of a flat cinema screen or a fully
-immersive view filling the headset.
+the scene is viewed through a flat or curved aperture fixed in tracking space.
+The result reads like a physical window onto the live 3D world instead of a
+flat cinema screen or a fully immersive view filling the headset. Turning or
+translating your head changes the angle from which you see the window; the
+window does not follow your head after it is anchored.
 
 The feature is off by default and saved per game. Open UEVR's in-game menu,
 select **6DOF Window**, enable it, and adjust:
 
-- **Window Width / Height** — the clear aperture size.
-- **Soft Edge** — the width of the fade from the game into black.
-- **Window Stereo Depth** — per-eye convergence that makes the aperture feel
-  nearer than optical infinity.
-- **Outside Darkness** — the strength of the black surround.
+- **Window X Width / Y Height** — exact physical dimensions in meters, with
+  an optional 16:9 lock.
+- **Distance From Recenter Origin** — exact physical depth in meters.
+- **Feather Width** — physical width of the soft edge.
+- **Corner Radius** — square through rounded-rectangle apertures.
+- **Horizontal Curvature** — flat through a symmetric cylinder centered in
+  front of the recenter origin.
+- **Surround Color / Opacity** — the color and strength outside the aperture.
+- **Recenter Window In Front Of Me** — captures a new room-space anchor.
 
 The mask is applied to UEVR's final submitted color images. It supports
 OpenXR and OpenVR, D3D11 and D3D12, and all three UEVR rendering methods.
 Depth and UI swapchains are not modified. This branch starts from UEVR nightly
 01139, source commit `74b76bc9428a906cbdc69de3ebc1905fd0e9cc57`.
 
+The fork also understands the transient `CutsceneComfort.WindowMode.v1`
+custom event from the standalone
+[CutsceneComfort plugin](https://github.com/elliotttate/uevr-cutscene-comfort).
+That lets the plugin temporarily apply its cutscene-only aperture settings to
+the final eye textures without overwriting the user's normal all-game Window
+Mode configuration. Ordinary UEVR plugins continue to load normally; this
+public fork does not contain a game-specific plugin allowlist.
+
 The settings are stored in each game's normal UEVR `config.txt` as
 `WindowMode_*` values, so enabling the mode for one game does not turn it on
-for every other game. Runtime validation currently covers a visual on/off A/B
-through OpenXR on D3D11. The D3D12 paths build and initialize in real OpenXR
-sessions, but the available D3D12 test hosts exited in their existing UEVR
-startup/rehook paths before a trustworthy submitted-frame capture was possible.
+for every other game. Runtime validation covers submitted-eye rendering,
+fixed-anchor movement, symmetric curvature, exact dimensions, feathering,
+rounded corners, and surround color through OpenXR on D3D11. The D3D12 path
+builds and initializes in Halo Campaign Evolved, but a trustworthy final-eye
+visual A/B remains open for this alpha.
 
 ## Supported Engine Versions
 

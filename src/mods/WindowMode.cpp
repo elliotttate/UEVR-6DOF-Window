@@ -1,11 +1,15 @@
 #include "WindowMode.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <sstream>
 
 #include <d3dcompiler.h>
 #include <imgui.h>
 #include <spdlog/spdlog.h>
+
+#include "VR.hpp"
 
 #pragma comment(lib, "d3dcompiler")
 
@@ -13,11 +17,15 @@ namespace {
 
 constexpr char k_shader[] = R"(
 cbuffer Constants : register(b0) {
-    float2 center;
-    float2 half_extents;
-    float feather;
-    float alpha;
-    float2 padding;
+    float4 eye_origin_and_full_mask;
+    float4 ray_center_and_curvature;
+    float4 ray_x_and_feather;
+    float4 ray_y_and_corner_radius;
+    float4 anchor_origin_and_distance;
+    float4 anchor_right_and_half_width;
+    float4 anchor_up_and_half_height;
+    float4 anchor_back;
+    float4 surround_color_and_opacity;
 };
 
 struct PSIn {
@@ -31,12 +39,86 @@ PSIn vs_main(float2 pos : POSITION) {
     output.ndc = pos;
     return output;
 }
-
 float4 ps_main(PSIn input) : SV_TARGET {
-    float2 d = abs(input.ndc - center) - half_extents;
-    float dist = length(max(d, 0.0f)) + min(max(d.x, d.y), 0.0f);
-    float mask = smoothstep(0.0f, max(feather, 0.0001f), dist);
-    return float4(0.0f, 0.0f, 0.0f, mask * alpha);
+    float mask = 1.0f;
+
+    if (eye_origin_and_full_mask.w < 0.5f) {
+        float3 eye_origin = eye_origin_and_full_mask.xyz;
+        float3 ray_direction = normalize(
+            ray_center_and_curvature.xyz +
+            input.ndc.x * ray_x_and_feather.xyz +
+            input.ndc.y * ray_y_and_corner_radius.xyz);
+        float3 origin = anchor_origin_and_distance.xyz;
+        float3 right = anchor_right_and_half_width.xyz;
+        float3 up = anchor_up_and_half_height.xyz;
+        float3 back = anchor_back.xyz;
+        float distance = max(anchor_origin_and_distance.w, 0.001f);
+        float curvature = saturate(ray_center_and_curvature.w);
+        float hit_t = -1.0f;
+        float local_x = 0.0f;
+        float local_y = 0.0f;
+
+        if (curvature <= 0.0001f) {
+            float3 plane_center = origin - back * distance;
+            float denominator = dot(ray_direction, back);
+            if (abs(denominator) > 0.00001f) {
+                hit_t = dot(plane_center - eye_origin, back) / denominator;
+                if (hit_t > 0.0001f) {
+                    float3 local = eye_origin + ray_direction * hit_t - plane_center;
+                    local_x = dot(local, right);
+                    local_y = dot(local, up);
+                }
+            }
+        } else {
+            // Curvature 1.0 places the cylinder axis at the recenter origin,
+            // so the aperture wraps around the player. Smaller values move
+            // the axis backward and approach the flat-plane solution.
+            float radius = distance / curvature;
+            float3 cylinder_center = origin + back * (radius - distance);
+            float3 offset = eye_origin - cylinder_center;
+            float3 horizontal_ray = ray_direction - up * dot(ray_direction, up);
+            float3 horizontal_offset = offset - up * dot(offset, up);
+            float a = dot(horizontal_ray, horizontal_ray);
+            float b = 2.0f * dot(horizontal_offset, horizontal_ray);
+            float c = dot(horizontal_offset, horizontal_offset) - radius * radius;
+            float discriminant = b * b - 4.0f * a * c;
+            if (a > 0.000001f && discriminant >= 0.0f) {
+                float root = sqrt(discriminant);
+                float near_t = (-b - root) / (2.0f * a);
+                float far_t = (-b + root) / (2.0f * a);
+                hit_t = near_t > 0.0001f ? near_t : (far_t > 0.0001f ? far_t : -1.0f);
+                if (hit_t > 0.0f) {
+                    float3 hit = eye_origin + ray_direction * hit_t;
+                    float3 cylinder_local = hit - cylinder_center;
+                    local_x = atan2(dot(cylinder_local, right), -dot(cylinder_local, back)) * radius;
+                    local_y = dot(hit - origin, up);
+                }
+            }
+        }
+
+        if (hit_t > 0.0f) {
+            float2 half_size = float2(
+                anchor_right_and_half_width.w,
+                anchor_up_and_half_height.w);
+            float corner_radius = clamp(
+                ray_y_and_corner_radius.w,
+                0.0f,
+                min(half_size.x, half_size.y));
+            float2 rounded = abs(float2(local_x, local_y)) - (half_size - corner_radius);
+            float signed_distance =
+                length(max(rounded, 0.0f)) +
+                min(max(rounded.x, rounded.y), 0.0f) -
+                corner_radius;
+            float feather = max(ray_x_and_feather.w, 0.0f);
+            mask = feather > 0.00001f
+                ? smoothstep(-feather, feather, signed_distance)
+                : (signed_distance >= 0.0f ? 1.0f : 0.0f);
+        }
+    }
+
+    return float4(
+        surround_color_and_opacity.rgb,
+        mask * saturate(surround_color_and_opacity.a));
 }
 )";
 
@@ -154,7 +236,14 @@ std::shared_ptr<WindowMode>& WindowMode::get() {
 }
 
 WindowMode::WindowMode() {
-    m_options = {*m_enabled, *m_width, *m_height, *m_feather, *m_depth, *m_opacity};
+    static_assert(sizeof(Constants) % 16 == 0,
+        "D3D11 constant buffers must be 16-byte aligned");
+    static_assert(sizeof(Constants) / sizeof(float) <= 64,
+        "D3D12 root constants must fit the 64-DWORD root signature limit");
+    m_options = {*m_enabled, *m_lock_aspect, *m_plane_width, *m_plane_height,
+        *m_anchor_distance, *m_feather, *m_corner_radius, *m_curvature,
+        *m_surround_red, *m_surround_green, *m_surround_blue, *m_opacity,
+        *m_external_bridge_available};
 }
 
 WindowMode::~WindowMode() {
@@ -167,22 +256,300 @@ void WindowMode::on_draw_sidebar_entry(std::string_view entry) {
         return;
     }
 
-    ImGui::TextWrapped("Optional comfort view: masks the outer part of each submitted eye image while leaving UEVR's stereo rendering and 6DOF head tracking untouched inside the window.");
+    ImGui::TextWrapped("Optional comfort view: places a physical flat or curved aperture in tracking space. The aperture stays where it was anchored while you move or turn your head.");
     ImGui::Spacing();
-    m_enabled->draw("Enable 6DOF Window Mode");
+    if (m_enabled->draw("Enable Room-Anchored 6DOF Window") && m_enabled->value()) {
+        request_recenter();
+    }
     ImGui::Separator();
-    m_width->draw("Window Width");
-    m_height->draw("Window Height");
-    m_feather->draw("Soft Edge");
-    m_depth->draw("Window Stereo Depth");
-    m_opacity->draw("Outside Darkness");
+    ImGui::TextDisabled("Ctrl+click a slider to type an exact value.");
+    m_plane_width->draw("Window X Width (meters)");
+    m_lock_aspect->draw("Lock to 16:9 Aspect");
+    if (m_lock_aspect->value()) {
+        ImGui::TextDisabled("Window Y Height: %.3f m (derived)",
+            std::clamp(m_plane_width->value(), 0.1f, 12.0f) * 9.0f / 16.0f);
+    } else {
+        m_plane_height->draw("Window Y Height (meters)");
+    }
+    m_anchor_distance->draw("Distance From Recenter Origin (meters)");
+    m_feather->draw("Feather Width (meters)");
+    m_corner_radius->draw("Corner Radius (meters; capped at half the shorter side)");
+    m_curvature->draw("Horizontal Curvature (0 = flat, 1 = around player)");
+    float surround_color[]{
+        std::clamp(m_surround_red->value(), 0.0f, 1.0f),
+        std::clamp(m_surround_green->value(), 0.0f, 1.0f),
+        std::clamp(m_surround_blue->value(), 0.0f, 1.0f),
+    };
+    if (ImGui::ColorEdit3("Surround Color", surround_color, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB)) {
+        m_surround_red->value() = surround_color[0];
+        m_surround_green->value() = surround_color[1];
+        m_surround_blue->value() = surround_color[2];
+    }
+    m_opacity->draw("Surround Opacity");
     ImGui::Spacing();
-    ImGui::TextWrapped("The world is not flattened or reprojected. You can still lean and see normal stereo parallax; this mode only darkens pixels outside the aperture.");
+    if (ImGui::Button("Recenter Window In Front Of Me")) {
+        request_recenter();
+    }
+    {
+        std::scoped_lock lock{m_anchor_mutex};
+        ImGui::SameLine();
+        ImGui::TextDisabled(m_anchor_valid ? "anchored" : "waiting for tracking");
+    }
+    ImGui::Spacing();
+    ImGui::TextWrapped("The game remains native stereo and 6DOF. The aperture is fixed at recenter time. Curvature bends that fixed surface toward a cylinder around the recenter origin; it never follows later head movement.");
 }
 
 void WindowMode::on_device_reset() {
+    invalidate_anchor();
     reset_d3d11();
     reset_d3d12();
+}
+
+void WindowMode::request_recenter() {
+    m_recenter_requested = true;
+}
+
+void WindowMode::apply_cutscene_comfort_state(std::string_view payload) {
+    std::istringstream stream{std::string{payload}};
+    int version{};
+    int active{};
+    int recenter{};
+    int lock_aspect{};
+    CutsceneComfortState next{};
+    if (!(stream >> version >> active >> recenter >> lock_aspect >>
+            next.width >> next.height >> next.distance >> next.feather >>
+            next.corner_radius >> next.curvature >>
+            next.surround_color.x >> next.surround_color.y >> next.surround_color.z >>
+            next.opacity) || version != 1) {
+        spdlog::warn("[6DOF Window] Ignoring malformed CutsceneComfort bridge state");
+        return;
+    }
+
+    next.active = active != 0;
+    next.lock_aspect = lock_aspect != 0;
+
+    bool entering{};
+    {
+        std::scoped_lock lock{m_cutscene_comfort_mutex};
+        entering = next.active && !m_cutscene_comfort.active;
+        m_cutscene_comfort = next;
+    }
+
+    if (next.active && (entering || recenter != 0)) {
+        request_recenter();
+    }
+}
+
+bool WindowMode::cutscene_comfort_active() const {
+    std::scoped_lock lock{m_cutscene_comfort_mutex};
+    return m_cutscene_comfort.active;
+}
+
+WindowMode::RenderSettings WindowMode::get_render_settings() const {
+    RenderSettings settings{};
+    {
+        std::scoped_lock lock{m_cutscene_comfort_mutex};
+        if (m_cutscene_comfort.active) {
+            settings.lock_aspect = m_cutscene_comfort.lock_aspect;
+            settings.width = m_cutscene_comfort.width;
+            settings.height = m_cutscene_comfort.height;
+            settings.distance = m_cutscene_comfort.distance;
+            settings.feather = m_cutscene_comfort.feather;
+            settings.corner_radius = m_cutscene_comfort.corner_radius;
+            settings.curvature = m_cutscene_comfort.curvature;
+            settings.surround_color = m_cutscene_comfort.surround_color;
+            settings.opacity = m_cutscene_comfort.opacity;
+        } else {
+            settings.lock_aspect = m_lock_aspect->value();
+            settings.width = m_plane_width->value();
+            settings.height = m_plane_height->value();
+            settings.distance = m_anchor_distance->value();
+            settings.feather = m_feather->value();
+            settings.corner_radius = m_corner_radius->value();
+            settings.curvature = m_curvature->value();
+            settings.surround_color = Vector3f{
+                m_surround_red->value(), m_surround_green->value(), m_surround_blue->value()};
+            settings.opacity = m_opacity->value();
+        }
+    }
+
+    settings.width = std::clamp(settings.width, 0.1f, 12.0f);
+    settings.height = settings.lock_aspect
+        ? settings.width * 9.0f / 16.0f
+        : std::clamp(settings.height, 0.1f, 8.0f);
+    settings.distance = std::clamp(settings.distance, 0.25f, 12.0f);
+    settings.feather = std::clamp(settings.feather, 0.0f, 0.5f);
+    settings.corner_radius = std::min(
+        std::clamp(settings.corner_radius, 0.0f, 2.0f),
+        std::min(settings.width, settings.height) * 0.5f);
+    settings.curvature = std::clamp(settings.curvature, 0.0f, 1.0f);
+    settings.surround_color = glm::clamp(settings.surround_color, Vector3f{0.0f}, Vector3f{1.0f});
+    settings.opacity = std::clamp(settings.opacity, 0.0f, 1.0f);
+    return settings;
+}
+
+WindowMode::Status WindowMode::get_status() const {
+    const auto settings = get_render_settings();
+    Status status{};
+    status.enabled = m_enabled->value() || cutscene_comfort_active();
+    status.recenter_pending = m_recenter_requested.load();
+    status.lock_aspect = settings.lock_aspect;
+    status.width = settings.width;
+    status.height = settings.height;
+    status.anchor_distance = settings.distance;
+    status.feather = settings.feather;
+    status.corner_radius = settings.corner_radius;
+    status.curvature = settings.curvature;
+    status.opacity = settings.opacity;
+    status.surround_color = settings.surround_color;
+
+    std::scoped_lock lock{m_anchor_mutex};
+    status.anchor_valid = m_anchor_valid;
+    status.anchor_origin = m_anchor_origin;
+    status.anchor_center = m_anchor_origin - m_anchor_back * status.anchor_distance;
+    status.anchor_right = m_anchor_right;
+    status.anchor_up = m_anchor_up;
+    status.anchor_back = m_anchor_back;
+    return status;
+}
+
+void WindowMode::invalidate_anchor() {
+    std::scoped_lock lock{m_anchor_mutex};
+    m_anchor_valid = false;
+    m_recenter_requested = true;
+}
+
+bool WindowMode::update_enabled_state() {
+    const bool enabled = m_enabled->value() || cutscene_comfort_active();
+    if (!enabled) {
+        if (m_was_enabled.exchange(false)) {
+            invalidate_anchor();
+        }
+        return false;
+    }
+
+    if (!m_was_enabled.exchange(true)) {
+        request_recenter();
+    }
+    return true;
+}
+
+bool WindowMode::build_constants(bool right_eye, Constants& constants) {
+    const auto settings = get_render_settings();
+    constants = {};
+    constants.eye_origin[3] = 1.0f;
+    constants.surround_color[0] = settings.surround_color.x;
+    constants.surround_color[1] = settings.surround_color.y;
+    constants.surround_color[2] = settings.surround_color.z;
+    constants.surround_color[3] = settings.opacity;
+
+    const auto& vr = VR::get();
+    if (vr == nullptr || !vr->is_hmd_active()) {
+        return false;
+    }
+
+    const auto frame_count = static_cast<uint32_t>(std::max(vr->get_frame_count(), 0));
+    const auto hmd_transform = vr->get_hmd_transform(frame_count);
+    const auto hmd_position = Vector3f{hmd_transform[3]};
+    const auto hmd_right = Vector3f{hmd_transform[0]};
+    const auto hmd_up = Vector3f{hmd_transform[1]};
+    const auto hmd_back = Vector3f{hmd_transform[2]};
+
+    const auto finite_vector = [](const Vector3f& value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    if (!finite_vector(hmd_position) || !finite_vector(hmd_right) ||
+        !finite_vector(hmd_up) || !finite_vector(hmd_back) ||
+        glm::length(hmd_right) < 0.5f || glm::length(hmd_up) < 0.5f ||
+        glm::length(hmd_back) < 0.5f) {
+        return false;
+    }
+
+    Vector3f anchor_origin{};
+    Vector3f anchor_right{};
+    Vector3f anchor_up{};
+    Vector3f anchor_back{};
+    {
+        std::scoped_lock lock{m_anchor_mutex};
+        // Consume the request even on the first valid frame. Leaving it set
+        // when m_anchor_valid is false makes the second eye recenter and log
+        // the same plane again because of boolean short-circuiting.
+        const bool recenter_requested = m_recenter_requested.exchange(false);
+        if (!m_anchor_valid || recenter_requested) {
+            m_anchor_right = glm::normalize(hmd_right);
+            m_anchor_up = glm::normalize(hmd_up);
+            m_anchor_back = glm::normalize(hmd_back);
+            m_anchor_origin = hmd_position;
+            m_anchor_valid = true;
+            const auto center = m_anchor_origin - m_anchor_back *
+                settings.distance;
+            spdlog::info(
+                "[6DOF Window] Anchored room-space aperture origin ({:.3f}, {:.3f}, {:.3f}), center ({:.3f}, {:.3f}, {:.3f})",
+                m_anchor_origin.x, m_anchor_origin.y, m_anchor_origin.z,
+                center.x, center.y, center.z);
+        }
+
+        anchor_origin = m_anchor_origin;
+        anchor_right = m_anchor_right;
+        anchor_up = m_anchor_up;
+        anchor_back = m_anchor_back;
+    }
+
+    const float width = settings.width;
+    const float height = settings.height;
+
+    const auto eye = right_eye ? VRRuntime::Eye::RIGHT : VRRuntime::Eye::LEFT;
+    const auto eye_world = hmd_transform * vr->get_eye_transform(static_cast<uint32_t>(eye));
+    const auto eye_origin = Vector3f{eye_world[3]};
+    const Matrix4x4f tracking_to_projection{
+        1.0f, 0.0f,  0.0f, 0.0f,
+        0.0f, 1.0f,  0.0f, 0.0f,
+        0.0f, 0.0f, -1.0f, 0.0f,
+        0.0f, 0.0f,  0.0f, 1.0f,
+    };
+    const auto view = tracking_to_projection * glm::inverse(eye_world);
+    const auto projection = vr->get_projection_matrix(eye);
+    const auto clip_to_tracking = glm::inverse(projection * view);
+
+    const auto make_ray = [&](float x, float y, Vector3f& ray) {
+        const auto tracking = clip_to_tracking * glm::vec4{x, y, 1.0f, 1.0f};
+        if (!std::isfinite(tracking.x) || !std::isfinite(tracking.y) ||
+            !std::isfinite(tracking.z) || !std::isfinite(tracking.w) ||
+            std::abs(tracking.w) <= 0.000001f) {
+            return false;
+        }
+        ray = Vector3f{tracking} / tracking.w - eye_origin;
+        return finite_vector(ray) && glm::length(ray) > 0.000001f;
+    };
+
+    Vector3f ray_center{};
+    Vector3f ray_at_x{};
+    Vector3f ray_at_y{};
+    if (!make_ray(0.0f, 0.0f, ray_center) ||
+        !make_ray(1.0f, 0.0f, ray_at_x) ||
+        !make_ray(0.0f, 1.0f, ray_at_y)) {
+        return true;
+    }
+
+    const auto set_vector = [](float (&destination)[4], const Vector3f& value, float scalar) {
+        destination[0] = value.x;
+        destination[1] = value.y;
+        destination[2] = value.z;
+        destination[3] = scalar;
+    };
+    set_vector(constants.eye_origin, eye_origin, 0.0f);
+    set_vector(constants.ray_center, ray_center,
+        settings.curvature);
+    set_vector(constants.ray_x, ray_at_x - ray_center,
+        settings.feather);
+    set_vector(constants.ray_y, ray_at_y - ray_center,
+        settings.corner_radius);
+    set_vector(constants.anchor_origin, anchor_origin,
+        settings.distance);
+    set_vector(constants.anchor_right, anchor_right, width * 0.5f);
+    set_vector(constants.anchor_up, anchor_up, height * 0.5f);
+    set_vector(constants.anchor_back, anchor_back, 0.0f);
+    return true;
 }
 
 bool WindowMode::ensure_d3d11_objects(ID3D11Device* device) {
@@ -307,7 +674,9 @@ ID3D11RenderTargetView* WindowMode::get_d3d11_rtv(ID3D11Device* device, ID3D11Te
 
 bool WindowMode::draw_d3d11(ID3D11DeviceContext* context, ID3D11Texture2D* target,
     ID3D11RenderTargetView* rtv, Layout layout) {
-    if (!m_enabled->value() || context == nullptr || target == nullptr || m_opacity->value() <= 0.001f) {
+    const auto settings = get_render_settings();
+    if (!update_enabled_state() || context == nullptr || target == nullptr ||
+        settings.opacity <= 0.001f) {
         return false;
     }
 
@@ -369,11 +738,9 @@ bool WindowMode::draw_d3d11(ID3D11DeviceContext* context, ID3D11Texture2D* targe
         context->RSSetScissorRects(1, &scissor);
 
         Constants constants{};
-        constants.center_x = right_eye ? -m_depth->value() : m_depth->value();
-        constants.half_x = std::clamp(m_width->value(), 0.05f, 0.98f);
-        constants.half_y = std::clamp(m_height->value(), 0.05f, 0.98f);
-        constants.feather = std::max(m_feather->value(), 0.001f);
-        constants.alpha = std::clamp(m_opacity->value(), 0.0f, 1.0f);
+        if (!build_constants(right_eye, constants)) {
+            return false;
+        }
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(context->Map(m_d3d11_constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -503,7 +870,9 @@ bool WindowMode::ensure_d3d12_objects(ID3D12Device* device, DXGI_FORMAT format) 
 
 bool WindowMode::draw_d3d12(ID3D12GraphicsCommandList* command_list, ID3D12Resource* target,
     D3D12_CPU_DESCRIPTOR_HANDLE rtv, Layout layout, D3D12_RESOURCE_STATES target_state) {
-    if (!m_enabled->value() || command_list == nullptr || target == nullptr || rtv.ptr == 0 || m_opacity->value() <= 0.001f) {
+    const auto settings = get_render_settings();
+    if (!update_enabled_state() || command_list == nullptr || target == nullptr ||
+        rtv.ptr == 0 || settings.opacity <= 0.001f) {
         return false;
     }
 
@@ -556,11 +925,14 @@ bool WindowMode::draw_d3d12(ID3D12GraphicsCommandList* command_list, ID3D12Resou
         command_list->RSSetScissorRects(1, &scissor);
 
         Constants constants{};
-        constants.center_x = right_eye ? -m_depth->value() : m_depth->value();
-        constants.half_x = std::clamp(m_width->value(), 0.05f, 0.98f);
-        constants.half_y = std::clamp(m_height->value(), 0.05f, 0.98f);
-        constants.feather = std::max(m_feather->value(), 0.001f);
-        constants.alpha = std::clamp(m_opacity->value(), 0.0f, 1.0f);
+        if (!build_constants(right_eye, constants)) {
+            if (needs_transition) {
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier.Transition.StateAfter = target_state;
+                command_list->ResourceBarrier(1, &barrier);
+            }
+            return false;
+        }
         command_list->SetGraphicsRoot32BitConstants(0, sizeof(Constants) / sizeof(float), &constants, 0);
         command_list->DrawInstanced(6, 1, 0, 0);
     }
