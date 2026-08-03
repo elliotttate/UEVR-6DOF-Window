@@ -7,6 +7,7 @@
 
 #include "Framework.hpp"
 #include "../VR.hpp"
+#include "../WindowMode.hpp"
 
 #include <../../directxtk12-src/Inc/ResourceUploadBatch.h>
 #include <../../directxtk12-src/Inc/RenderTargetState.h>
@@ -1411,6 +1412,26 @@ std::optional<std::string> D3D12Component::OpenXR::create_swapchains() {
             spdlog::info("[VR] AFTER Swapchain texture {} {} ref count: {}", i, j, ref_count);
         }
 
+        // Normal color swapchains are copied to first and then may receive the
+        // room-anchored window draw before they are released to OpenXR. Keep a
+        // separate RTV descriptor per swapchain image so an in-flight command
+        // list never observes an overwritten descriptor. Static images keep
+        // using the one-shot initialization path below, and depth images must
+        // not receive an RTV.
+        if ((swapchain_create_info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) == 0 &&
+            (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) == 0) {
+            for (uint32_t j = 0; j < image_count; ++j) {
+                auto& texture_ctx = ctx.texture_contexts[j];
+                texture_ctx->texture = ctx.textures[j].texture;
+
+                if (!texture_ctx->create_rtv(device, (DXGI_FORMAT)swapchain_create_info.format)) {
+                    spdlog::error("[VR] Failed to create persistent RTV for swapchain {} image {}.", i, j);
+                }
+
+                texture_ctx->texture.Reset();
+            }
+        }
+
         if (swapchain_create_info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) {
             for (uint32_t j = 0; j < image_count; ++j) {
                 XrSwapchainImageAcquireInfo acquire_info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -1779,6 +1800,18 @@ void D3D12Component::OpenXR::copy(
 
             if (additional_commands) {
                 (*additional_commands)(texture_ctx->commands);
+            }
+
+            const auto double_wide = (uint32_t)runtimes::OpenXR::SwapchainIndex::DOUBLE_WIDE;
+            const auto left_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_LEFT_EYE;
+            const auto right_eye = (uint32_t)runtimes::OpenXR::SwapchainIndex::AFR_RIGHT_EYE;
+            if (swapchain_idx == double_wide || swapchain_idx == left_eye || swapchain_idx == right_eye) {
+                const auto layout = swapchain_idx == double_wide ? WindowMode::Layout::DOUBLE_WIDE
+                    : (swapchain_idx == left_eye ? WindowMode::Layout::LEFT_EYE : WindowMode::Layout::RIGHT_EYE);
+                if (WindowMode::get()->draw_d3d12(texture_ctx->commands.cmd_list.Get(),
+                        ctx.textures[texture_index].texture, texture_ctx->get_rtv(), layout)) {
+                    texture_ctx->commands.has_commands = true;
+                }
             }
 
             texture_ctx->commands.execute();

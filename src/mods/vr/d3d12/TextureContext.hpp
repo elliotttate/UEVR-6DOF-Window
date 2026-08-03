@@ -18,6 +18,10 @@ struct TextureContext {
     bool create_srv(ID3D12Device* device, std::optional<DXGI_FORMAT> format = std::nullopt);
 
     D3D12_CPU_DESCRIPTOR_HANDLE get_rtv() const {
+        if (rtv_heap == nullptr) {
+            return {};
+        }
+
         return rtv_heap->GetCpuHandle(0);
     }
 

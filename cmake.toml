@@ -244,6 +244,7 @@ link-libraries = [
     "shlwapi",
     "d3d11",
     "d3d12",
+    "d3dcompiler",
     "safetyhook",
     "glm",
     "imgui",

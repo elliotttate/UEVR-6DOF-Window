@@ -7,6 +7,7 @@
 #include "mods/PluginLoader.hpp"
 #include "mods/LuaLoader.hpp"
 #include "mods/UObjectHook.hpp"
+#include "mods/WindowMode.hpp"
 #include "Mods.hpp"
 
 Mods::Mods() {
@@ -16,6 +17,7 @@ Mods::Mods() {
 
     m_mods.emplace_back(PluginLoader::get());
     m_mods.emplace_back(LuaLoader::get());
+    m_mods.emplace_back(WindowMode::get());
 }
 
 std::optional<std::string> Mods::on_initialize() const {
